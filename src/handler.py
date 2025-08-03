@@ -1,35 +1,52 @@
-""" Example handler file. """
-
-import runpod
-from diffusers import AutoPipelineForText2Image
-import torch
 import base64
-import io
-import time
+import os
+from runpod.serverless.modules.rp_handler import RunPodHandler
+from faster_whisper import WhisperModel
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-# If your handler runs inference on a model, load the model here.
-# You will want models to be loaded into memory before starting serverless.
+TRANSCRIPT_FILE = "transcriptie.txt"
+SUMMARY_FILE = "samenvatting.txt"
+MODEL_NAME = "BramVanroy/GEITje-7B-ultra"
+HF_TOKEN = os.environ.get("HUGGINGFACE_HUB_TOKEN")
 
-try:
-    pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16")
-    pipe.to("cuda")
-except RuntimeError:
-    quit()
+whisper_model = WhisperModel("large-v3", compute_type="float16")
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=HF_TOKEN)
+model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, token=HF_TOKEN)
+
+def transcribe_audio(base64_audio):
+    audio_bytes = base64.b64decode(base64_audio)
+    temp_path = "/tmp/input.wav"
+    with open(temp_path, "wb") as f:
+        f.write(audio_bytes)
+    segments, _ = whisper_model.transcribe(temp_path, language="nl")
+    transcript = " ".join([seg.text.strip() for seg in segments])
+    return transcript
+
+def summarize_text(text):
+    prompt = f"Vat onderstaande tekst samen in het Nederlands:\n\n{text}\n\nSamenvatting:"
+    inputs = tokenizer(prompt, return_tensors="pt")
+    outputs = model.generate(**inputs, max_new_tokens=200)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 def handler(job):
-    """ Handler function that will be used to process jobs. """
-    job_input = job['input']
-    prompt = job_input['prompt']
+    job_input = job["input"]
+    action = job_input.get("action")
 
-    time_start = time.time()
-    image = pipe(prompt=prompt, num_inference_steps=1, guidance_scale=0.0).images[0]
-    print(f"Time taken: {time.time() - time_start}")
+    if action == "transcribe":
+        base64_audio = job_input.get("audio_path")
+        if not base64_audio:
+            return { "error": "audio_path ontbreekt" }
+        transcript = transcribe_audio(base64_audio)
+        return { "output": { "transcript": transcript } }
 
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    image_bytes = buffer.getvalue()
+    elif action == "summarize":
+        transcript_text = job_input.get("transcript_text")
+        if not transcript_text:
+            return { "error": "transcript_text ontbreekt" }
+        summary = summarize_text(transcript_text)
+        return { "output": { "summary": summary } }
 
-    return base64.b64encode(image_bytes).decode('utf-8')
+    else:
+        return { "error": f"Ongeldige actie '{action}'" }
 
-
-runpod.serverless.start({"handler": handler})
+handler = RunPodHandler(handler)
