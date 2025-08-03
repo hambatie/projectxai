@@ -1,6 +1,6 @@
 import base64
 import os
-from runpod.serverless.handler import RunPodServerless
+from runpod.serverless.modules.rp_handler import handler
 from faster_whisper import WhisperModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -50,5 +50,5 @@ def handler(job):
     else:
         return { "error": f"Ongeldige actie '{action}'" }
 
-handler = RunPodServerless(handler)
+
 
